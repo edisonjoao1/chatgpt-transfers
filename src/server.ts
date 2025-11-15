@@ -20,6 +20,14 @@ const CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 const transfers = new Map<string, any>();
 let transferCounter = 1000;
 
+// Recipient storage
+const recipients = new Map<string, any>();
+let recipientCounter = 1;
+
+// Scheduled transfers storage
+const scheduledTransfers = new Map<string, any>();
+let scheduledCounter = 1;
+
 // Transfer limits
 const transferLimits = {
   daily: 10000,
@@ -182,6 +190,33 @@ function simulateMyBambuTransfer(transferData: any) {
     status: randomStatus,
     estimatedDelivery: new Date(Date.now() + 35 * 60 * 1000).toISOString(),
   };
+}
+
+// Calculate next execution dates for scheduled transfers
+function getNextExecutionDates(frequency: string, startDate: string, count: number): string[] {
+  const dates: string[] = [];
+  let currentDate = new Date(startDate);
+
+  for (let i = 0; i < count; i++) {
+    dates.push(currentDate.toISOString());
+
+    switch (frequency) {
+      case 'weekly':
+        currentDate = new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'bi-weekly':
+        currentDate = new Date(currentDate.getTime() + 14 * 24 * 60 * 60 * 1000);
+        break;
+      case 'monthly':
+        currentDate = new Date(currentDate.setMonth(currentDate.getMonth() + 1));
+        break;
+      case 'quarterly':
+        currentDate = new Date(currentDate.setMonth(currentDate.getMonth() + 3));
+        break;
+    }
+  }
+
+  return dates;
 }
 
 // Component resources - these are the interactive widgets
@@ -798,6 +833,445 @@ function getTransferHistoryComponent(): string {
 </html>`;
 }
 
+function getRecipientManagementComponent(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 28px;
+      max-width: 600px;
+      margin: 0 auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #f0f0f0;
+    }
+    .mybambu-logo {
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+    h1 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #666;
+    }
+    .recipient-card {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border-left: 4px solid #667eea;
+      position: relative;
+    }
+    .recipient-card:hover {
+      transform: translateX(4px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .recipient-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .recipient-name {
+      font-size: 20px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    .recipient-country {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .recipient-currency {
+      font-size: 12px;
+      color: #999;
+      font-family: monospace;
+    }
+    .delete-btn {
+      background: #dc3545;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .delete-btn:hover {
+      background: #c82333;
+      transform: scale(1.05);
+    }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+    }
+    .empty-state-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+    .add-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 20px;
+    }
+    .add-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="mybambu-logo">MyBambu</div>
+      <h1>👥 Saved Recipients</h1>
+      <p class="subtitle" id="subtitle">Loading...</p>
+    </div>
+    <div id="recipientList"></div>
+    <button class="add-btn" onclick="addRecipient()">➕ Add New Recipient</button>
+  </div>
+
+  <script>
+    function render() {
+      if (!window.openai || !window.openai.toolOutput) {
+        setTimeout(render, 100);
+        return;
+      }
+
+      const data = window.openai.toolOutput;
+      const recips = data.recipients || [];
+
+      document.getElementById('subtitle').textContent =
+        recips.length > 0
+          ? \`\${recips.length} saved recipient\${recips.length !== 1 ? 's' : ''}\`
+          : 'No recipients yet';
+
+      const listEl = document.getElementById('recipientList');
+
+      if (recips.length === 0) {
+        listEl.innerHTML = \`
+          <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <p>No saved recipients yet</p>
+            <p style="font-size: 12px; margin-top: 8px;">Add recipients to send money faster next time!</p>
+          </div>
+        \`;
+        return;
+      }
+
+      listEl.innerHTML = recips.map(r => \`
+        <div class="recipient-card" onclick="sendToRecipient('\${r.id}')">
+          <div class="recipient-header">
+            <div>
+              <div class="recipient-name">\${r.name}</div>
+              <div class="recipient-country">📍 \${r.country}</div>
+              <div class="recipient-currency">💱 \${r.currency}</div>
+            </div>
+            <button class="delete-btn" onclick="event.stopPropagation(); deleteRecipient('\${r.id}')">Delete</button>
+          </div>
+        </div>
+      \`).join('');
+    }
+
+    async function sendToRecipient(id) {
+      if (window.openai && window.openai.sendFollowUpMessage) {
+        const data = window.openai.toolOutput;
+        const recipient = data.recipients.find((r: any) => r.id === id);
+        if (recipient) {
+          await window.openai.sendFollowUpMessage({
+            role: 'user',
+            content: \`Send money to \${recipient.name} in \${recipient.country}\`
+          });
+        }
+      }
+    }
+
+    async function deleteRecipient(id) {
+      if (window.openai && window.openai.callTool) {
+        await window.openai.callTool({
+          name: 'delete_recipient',
+          input: { recipient_id: id }
+        });
+      }
+    }
+
+    async function addRecipient() {
+      if (window.openai && window.openai.sendFollowUpMessage) {
+        await window.openai.sendFollowUpMessage({
+          role: 'user',
+          content: 'Add a new recipient'
+        });
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', render);
+    window.addEventListener('openai:set_globals', render);
+  </script>
+</body>
+</html>`;
+}
+
+function getScheduledTransfersComponent(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 28px;
+      max-width: 600px;
+      margin: 0 auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #f0f0f0;
+    }
+    .mybambu-logo {
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+    h1 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #666;
+    }
+    .schedule-card {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      border-left: 4px solid #28a745;
+      position: relative;
+    }
+    .schedule-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .schedule-amount {
+      font-size: 28px;
+      font-weight: 700;
+      color: #28a745;
+    }
+    .schedule-frequency {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      background: #d4edda;
+      color: #155724;
+      margin-top: 4px;
+    }
+    .schedule-details {
+      font-size: 14px;
+      color: #666;
+      margin-top: 8px;
+    }
+    .schedule-detail-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-top: 1px solid #e0e0e0;
+    }
+    .cancel-btn {
+      background: #dc3545;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 12px;
+      width: 100%;
+    }
+    .cancel-btn:hover {
+      background: #c82333;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+    }
+    .empty-state-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+    .add-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 20px;
+    }
+    .add-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="mybambu-logo">MyBambu</div>
+      <h1>📅 Scheduled Transfers</h1>
+      <p class="subtitle" id="subtitle">Loading...</p>
+    </div>
+    <div id="scheduleList"></div>
+    <button class="add-btn" onclick="scheduleNew()">➕ Schedule New Transfer</button>
+  </div>
+
+  <script>
+    function render() {
+      if (!window.openai || !window.openai.toolOutput) {
+        setTimeout(render, 100);
+        return;
+      }
+
+      const data = window.openai.toolOutput;
+      const schedules = data.schedules || [];
+
+      document.getElementById('subtitle').textContent =
+        schedules.length > 0
+          ? \`\${schedules.length} active schedule\${schedules.length !== 1 ? 's' : ''}\`
+          : 'No scheduled transfers';
+
+      const listEl = document.getElementById('scheduleList');
+
+      if (schedules.length === 0) {
+        listEl.innerHTML = \`
+          <div class="empty-state">
+            <div class="empty-state-icon">📅</div>
+            <p>No scheduled transfers</p>
+            <p style="font-size: 12px; margin-top: 8px;">Set up recurring payments to send money automatically!</p>
+          </div>
+        \`;
+        return;
+      }
+
+      listEl.innerHTML = schedules.map(s => \`
+        <div class="schedule-card">
+          <div class="schedule-header">
+            <div>
+              <div class="schedule-amount">$\${s.amount.toFixed(2)}</div>
+              <div class="schedule-frequency">\${s.frequency}</div>
+            </div>
+          </div>
+          <div class="schedule-details">
+            <div class="schedule-detail-row">
+              <span style="color: #999;">To:</span>
+              <span style="font-weight: 600;">\${s.recipient_name}</span>
+            </div>
+            <div class="schedule-detail-row">
+              <span style="color: #999;">Country:</span>
+              <span>\${s.country} (\${s.currency})</span>
+            </div>
+            <div class="schedule-detail-row">
+              <span style="color: #999;">Next Transfer:</span>
+              <span>\${new Date(s.next_execution).toLocaleDateString()}</span>
+            </div>
+          </div>
+          <button class="cancel-btn" onclick="cancelSchedule('\${s.id}')">Cancel Schedule</button>
+        </div>
+      \`).join('');
+    }
+
+    async function cancelSchedule(id) {
+      if (window.openai && window.openai.callTool) {
+        await window.openai.callTool({
+          name: 'cancel_scheduled_transfer',
+          input: { schedule_id: id }
+        });
+      }
+    }
+
+    async function scheduleNew() {
+      if (window.openai && window.openai.sendFollowUpMessage) {
+        await window.openai.sendFollowUpMessage({
+          role: 'user',
+          content: 'Schedule a recurring transfer'
+        });
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', render);
+    window.addEventListener('openai:set_globals', render);
+  </script>
+</body>
+</html>`;
+}
+
 // Create MCP server
 function createTransfersServer(): Server {
   const server = new Server(
@@ -833,6 +1307,18 @@ function createTransfersServer(): Server {
         name: "Transfer History Widget",
         mimeType: "text/html+skybridge",
         description: "Transfer history list"
+      },
+      {
+        uri: "component://recipient-management",
+        name: "Recipient Management Widget",
+        mimeType: "text/html+skybridge",
+        description: "Manage saved recipients with add and delete"
+      },
+      {
+        uri: "component://scheduled-transfers",
+        name: "Scheduled Transfers Widget",
+        mimeType: "text/html+skybridge",
+        description: "View and manage recurring transfer schedules"
       }
     ]
   }));
@@ -848,6 +1334,10 @@ function createTransfersServer(): Server {
       html = getExchangeRateComponent();
     } else if (uri === "component://transfer-history") {
       html = getTransferHistoryComponent();
+    } else if (uri === "component://recipient-management") {
+      html = getRecipientManagementComponent();
+    } else if (uri === "component://scheduled-transfers") {
+      html = getScheduledTransfersComponent();
     } else {
       throw new Error(`Unknown resource: ${uri}`);
     }
@@ -982,6 +1472,151 @@ function createTransfersServer(): Server {
             invoked: "Countries list retrieved"
           },
           readOnlyHint: true
+        }
+      },
+      {
+        name: "add_recipient",
+        description: "Use this when the user wants to save, add, or remember a recipient for future transfers. Captures phrases like 'save Maria as a recipient', 'add my mom', 'remember John in Mexico', 'save this person', or any variation of saving contact information for sending money later.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Recipient's full name or nickname (e.g., 'Maria', 'Mom', 'John Smith')"
+            },
+            country: {
+              type: "string",
+              description: "Recipient's country"
+            },
+            currency: {
+              type: "string",
+              description: "Recipient's currency code (optional, can be inferred from country)"
+            }
+          },
+          required: ["name", "country"],
+        },
+        _meta: {
+          "openai/outputTemplate": "component://recipient-management",
+          "openai/toolInvocation": {
+            invoking: "Saving recipient...",
+            invoked: "Recipient saved successfully!"
+          },
+          readOnlyHint: false
+        }
+      },
+      {
+        name: "list_recipients",
+        description: "Use this when the user wants to see, view, show, list, or check their saved recipients, contacts, or people they send money to. Captures phrases like 'show my recipients', 'who do I send money to', 'list my contacts', 'show saved people', or any variation of viewing saved recipients.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+        _meta: {
+          "openai/outputTemplate": "component://recipient-management",
+          "openai/toolInvocation": {
+            invoking: "Loading your saved recipients...",
+            invoked: "Recipients loaded"
+          },
+          readOnlyHint: true
+        }
+      },
+      {
+        name: "delete_recipient",
+        description: "Use this when the user wants to remove, delete, forget, or unsave a recipient. Captures phrases like 'delete Maria', 'remove my mom from recipients', 'forget John', 'unsave this person', or any variation of removing a saved contact.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            recipient_id: {
+              type: "string",
+              description: "The unique ID of the recipient to delete"
+            }
+          },
+          required: ["recipient_id"],
+        },
+        _meta: {
+          "openai/outputTemplate": "component://recipient-management",
+          "openai/toolInvocation": {
+            invoking: "Removing recipient...",
+            invoked: "Recipient removed"
+          },
+          readOnlyHint: false
+        }
+      },
+      {
+        name: "schedule_transfer",
+        description: "Use this when the user wants to set up recurring, scheduled, automatic, or repeated transfers. Captures phrases like 'send $100 every month', 'schedule monthly payment', 'set up recurring transfer', 'automatically send money weekly', 'pay my rent every month', or any variation of setting up automatic recurring payments.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            amount: {
+              type: "number",
+              description: "Amount to send per transfer"
+            },
+            to_country: {
+              type: "string",
+              description: "Destination country"
+            },
+            recipient_name: {
+              type: "string",
+              description: "Recipient's name"
+            },
+            frequency: {
+              type: "string",
+              description: "Frequency of transfers",
+              enum: ["weekly", "bi-weekly", "monthly", "quarterly"]
+            },
+            start_date: {
+              type: "string",
+              description: "When to start (optional, defaults to next occurrence)"
+            }
+          },
+          required: ["amount", "to_country", "recipient_name", "frequency"],
+        },
+        _meta: {
+          "openai/outputTemplate": "component://scheduled-transfers",
+          "openai/toolInvocation": {
+            invoking: "Setting up recurring transfer...",
+            invoked: "Recurring transfer scheduled!"
+          },
+          readOnlyHint: false
+        }
+      },
+      {
+        name: "list_scheduled_transfers",
+        description: "Use this when the user wants to see, view, show, list, or check their scheduled, recurring, or automatic transfers. Captures phrases like 'show my scheduled transfers', 'what recurring payments do I have', 'list automatic transfers', 'show my subscriptions', or any variation of viewing scheduled payments.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+        _meta: {
+          "openai/outputTemplate": "component://scheduled-transfers",
+          "openai/toolInvocation": {
+            invoking: "Loading scheduled transfers...",
+            invoked: "Schedules loaded"
+          },
+          readOnlyHint: true
+        }
+      },
+      {
+        name: "cancel_scheduled_transfer",
+        description: "Use this when the user wants to cancel, stop, delete, or remove a scheduled or recurring transfer. Captures phrases like 'cancel my monthly payment', 'stop recurring transfer', 'delete scheduled payment', 'turn off automatic transfer', or any variation of stopping a scheduled transfer.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            schedule_id: {
+              type: "string",
+              description: "The unique ID of the scheduled transfer to cancel"
+            }
+          },
+          required: ["schedule_id"],
+        },
+        _meta: {
+          "openai/outputTemplate": "component://scheduled-transfers",
+          "openai/toolInvocation": {
+            invoking: "Canceling scheduled transfer...",
+            invoked: "Schedule canceled"
+          },
+          readOnlyHint: false
         }
       }
     ],
@@ -1250,6 +1885,289 @@ function createTransfersServer(): Server {
           byRegion,
           total: corridors.length,
           regions: Object.keys(byRegion)
+        }
+      };
+    }
+
+    // TOOL: add_recipient
+    if (toolName === "add_recipient") {
+      const { name, country, phone, email, relationship } = args as any;
+
+      // Validation
+      if (!name || !country) {
+        return {
+          content: [{
+            type: "text",
+            text: "❌ Please provide both recipient name and country"
+          }],
+          isError: true
+        };
+      }
+
+      // Verify country is supported
+      const corridor = SUPPORTED_CORRIDORS.find(c =>
+        c.country.toLowerCase() === country.toLowerCase()
+      );
+
+      if (!corridor) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Sorry, we don't support transfers to ${country} yet. Please use a supported country.`
+          }],
+          isError: true
+        };
+      }
+
+      // Create recipient
+      const recipientId = `RCP-${recipientCounter++}`;
+      const recipient = {
+        id: recipientId,
+        name,
+        country: corridor.country,
+        currency: corridor.currency,
+        phone: phone || null,
+        email: email || null,
+        relationship: relationship || 'Other',
+        created_at: new Date().toISOString(),
+        total_sent: 0,
+        transfer_count: 0
+      };
+
+      recipients.set(recipientId, recipient);
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Recipient saved! ${name} in ${corridor.country} has been added to your recipients list. You can now send money by saying "Send $100 to ${name}"`
+        }],
+        structuredContent: recipient,
+        _meta: {
+          recipientId,
+          totalRecipients: recipients.size,
+          supportedCurrency: corridor.currency
+        }
+      };
+    }
+
+    // TOOL: list_recipients
+    if (toolName === "list_recipients") {
+      const allRecipients = Array.from(recipients.values())
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      if (allRecipients.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `📭 You haven't saved any recipients yet. Save someone by saying "Add Maria in Mexico as a recipient"`
+          }],
+          structuredContent: {
+            recipients: [],
+            total: 0
+          }
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `📋 You have ${allRecipients.length} saved recipient${allRecipients.length !== 1 ? 's' : ''}:\n\n` +
+            allRecipients.map(r =>
+              `• ${r.name} (${r.country}) - ${r.transfer_count} transfer${r.transfer_count !== 1 ? 's' : ''}, $${r.total_sent.toFixed(2)} total`
+            ).join('\n') +
+            `\n\nSend money to anyone by saying "Send $100 to ${allRecipients[0].name}"`
+        }],
+        structuredContent: {
+          recipients: allRecipients,
+          total: allRecipients.length
+        }
+      };
+    }
+
+    // TOOL: delete_recipient
+    if (toolName === "delete_recipient") {
+      const { recipient_id } = args as any;
+
+      const recipient = recipients.get(recipient_id);
+
+      if (!recipient) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Recipient not found: ${recipient_id}. Use "list recipients" to see all saved recipients.`
+          }],
+          isError: true
+        };
+      }
+
+      const recipientName = recipient.name;
+      recipients.delete(recipient_id);
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ ${recipientName} has been removed from your recipients list.`
+        }],
+        structuredContent: {
+          deleted: true,
+          recipientId: recipient_id,
+          recipientName,
+          remainingRecipients: recipients.size
+        }
+      };
+    }
+
+    // TOOL: schedule_transfer
+    if (toolName === "schedule_transfer") {
+      const { amount, recipient_id, frequency, start_date } = args as any;
+
+      // Validation
+      if (amount <= 0) {
+        return {
+          content: [{
+            type: "text",
+            text: "❌ Amount must be greater than $0"
+          }],
+          isError: true
+        };
+      }
+
+      if (!recipient_id) {
+        return {
+          content: [{
+            type: "text",
+            text: "❌ Please specify a recipient. First save a recipient by saying 'Add Maria in Mexico'"
+          }],
+          isError: true
+        };
+      }
+
+      const recipient = recipients.get(recipient_id);
+      if (!recipient) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Recipient not found: ${recipient_id}. Please add them first.`
+          }],
+          isError: true
+        };
+      }
+
+      const validFrequencies = ['weekly', 'bi-weekly', 'monthly', 'quarterly'];
+      if (!validFrequencies.includes(frequency)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid frequency. Please choose: ${validFrequencies.join(', ')}`
+          }],
+          isError: true
+        };
+      }
+
+      // Create scheduled transfer
+      const scheduleId = `SCH-${scheduledCounter++}`;
+      const scheduledTransfer = {
+        id: scheduleId,
+        recipient_id,
+        recipient_name: recipient.name,
+        recipient_country: recipient.country,
+        amount,
+        currency_from: 'USD',
+        currency_to: recipient.currency,
+        frequency,
+        start_date: start_date || new Date().toISOString(),
+        next_execution: start_date || new Date().toISOString(),
+        status: 'active',
+        total_sent: 0,
+        execution_count: 0,
+        created_at: new Date().toISOString()
+      };
+
+      scheduledTransfers.set(scheduleId, scheduledTransfer);
+
+      // Calculate next execution dates based on frequency
+      const nextDates = getNextExecutionDates(frequency, start_date || new Date().toISOString(), 3);
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Scheduled transfer created! ${recipient.name} will receive $${amount} ${frequency}.\n\n📅 Next 3 payments:\n` +
+            nextDates.map((d, i) => `  ${i + 1}. ${new Date(d).toLocaleDateString()}`).join('\n') +
+            `\n\n🆔 Schedule ID: ${scheduleId}`
+        }],
+        structuredContent: scheduledTransfer,
+        _meta: {
+          scheduleId,
+          nextExecutionDates: nextDates,
+          totalScheduled: scheduledTransfers.size
+        }
+      };
+    }
+
+    // TOOL: list_scheduled_transfers
+    if (toolName === "list_scheduled_transfers") {
+      const allScheduled = Array.from(scheduledTransfers.values())
+        .filter(s => s.status === 'active')
+        .sort((a, b) => new Date(a.next_execution).getTime() - new Date(b.next_execution).getTime());
+
+      if (allScheduled.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `📭 You don't have any scheduled transfers. Set one up by saying "Send $100 to Maria every month"`
+          }],
+          structuredContent: {
+            scheduledTransfers: [],
+            total: 0
+          }
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `📋 You have ${allScheduled.length} active scheduled transfer${allScheduled.length !== 1 ? 's' : ''}:\n\n` +
+            allScheduled.map(s =>
+              `• $${s.amount} to ${s.recipient_name} (${s.frequency}) - Next: ${new Date(s.next_execution).toLocaleDateString()} (${s.id})`
+            ).join('\n')
+        }],
+        structuredContent: {
+          scheduledTransfers: allScheduled,
+          total: allScheduled.length
+        }
+      };
+    }
+
+    // TOOL: cancel_scheduled_transfer
+    if (toolName === "cancel_scheduled_transfer") {
+      const { schedule_id } = args as any;
+
+      const schedule = scheduledTransfers.get(schedule_id);
+
+      if (!schedule) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Scheduled transfer not found: ${schedule_id}. Use "list scheduled transfers" to see all active schedules.`
+          }],
+          isError: true
+        };
+      }
+
+      schedule.status = 'cancelled';
+      schedule.cancelled_at = new Date().toISOString();
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Scheduled transfer cancelled. $${schedule.amount} ${schedule.frequency} payments to ${schedule.recipient_name} have been stopped.`
+        }],
+        structuredContent: {
+          cancelled: true,
+          scheduleId: schedule_id,
+          recipientName: schedule.recipient_name,
+          amount: schedule.amount,
+          frequency: schedule.frequency
         }
       };
     }
