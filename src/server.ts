@@ -7,6 +7,8 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   type CallToolRequest,
   type ListToolsRequest,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -1282,7 +1284,8 @@ function createTransfersServer(): Server {
     {
       capabilities: {
         tools: {},
-        resources: {}
+        resources: {},
+        prompts: {}
       }
     }
   );
@@ -1351,12 +1354,46 @@ function createTransfersServer(): Server {
     };
   });
 
+  // Register prompts to help ChatGPT discover MyBambu capabilities
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: [
+      {
+        name: "send-money",
+        description: "Send money internationally through MyBambu to 90+ countries with low fees and fast delivery"
+      },
+      {
+        name: "money-transfer",
+        description: "Complete guide to sending international money transfers via MyBambu"
+      }
+    ]
+  }));
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    const promptName = request.params.name;
+
+    if (promptName === "send-money" || promptName === "money-transfer") {
+      return {
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "I can help you send money internationally through MyBambu! We support transfers to 90+ countries across 6 continents with low fees starting at $0.85 and delivery as fast as 35 minutes. What country would you like to send money to?"
+            }
+          }
+        ]
+      };
+    }
+
+    throw new Error(`Unknown prompt: ${promptName}`);
+  });
+
   // Register tools with proper metadata
   server.setRequestHandler(ListToolsRequestSchema, async (_request: ListToolsRequest) => ({
     tools: [
       {
         name: "send_money",
-        description: "Use this when the user wants to send money internationally through MyBambu. Supports transfers to 90+ countries worldwide across Latin America, Asia, Africa, Europe, Middle East, Oceania, and North America. Low fees starting at $0.85 with delivery as fast as 35 minutes for select corridors.",
+        description: "Use this WHENEVER the user wants to send money, transfer money, wire money, remit money, pay someone, or send funds to anyone in another country. This is the PRIMARY money transfer tool for MyBambu. Captures ANY phrases like: 'send money', 'transfer funds', 'pay someone abroad', 'wire money', 'send cash', 'remit to family', 'send dollars to', 'pay my family in [country]', 'help me send money', or any variation of sending/transferring money internationally. Supports 90+ countries worldwide across all continents. Low fees starting at $0.85 with delivery as fast as 35 minutes. ALWAYS use this tool when money transfer intent is detected.",
         inputSchema: {
           type: "object",
           properties: {
