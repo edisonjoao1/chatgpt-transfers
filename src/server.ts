@@ -5,6 +5,8 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
   type CallToolRequest,
   type ListToolsRequest,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -14,7 +16,7 @@ let exchangeRatesCache: any = null;
 let lastFetchTime = 0;
 const CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
-// Transfer storage
+// Transfer storage (in production, use a database)
 const transfers = new Map<string, any>();
 let transferCounter = 1000;
 
@@ -26,10 +28,24 @@ const transferLimits = {
   fees: { standard: 0.015, minFee: 2.99, maxFee: 50 },
 };
 
+// MyBambu supported corridors
+const SUPPORTED_CORRIDORS = [
+  { country: "Mexico", currency: "MXN", deliveryTime: "35 minutes" },
+  { country: "Guatemala", currency: "GTQ", deliveryTime: "1-2 hours" },
+  { country: "Honduras", currency: "HNL", deliveryTime: "1-2 hours" },
+  { country: "Dominican Republic", currency: "DOP", deliveryTime: "35 minutes" },
+  { country: "El Salvador", currency: "USD", deliveryTime: "35 minutes" },
+  { country: "Colombia", currency: "COP", deliveryTime: "1-3 hours" },
+  { country: "Peru", currency: "PEN", deliveryTime: "1-3 hours" },
+  { country: "Ecuador", currency: "USD", deliveryTime: "1-3 hours" },
+  { country: "Nicaragua", currency: "NIO", deliveryTime: "2-4 hours" },
+  { country: "Costa Rica", currency: "CRC", deliveryTime: "1-2 hours" },
+];
+
 // Fetch real-time exchange rates
 async function fetchExchangeRates() {
   const now = Date.now();
-  
+
   if (exchangeRatesCache && (now - lastFetchTime) < CACHE_DURATION) {
     return exchangeRatesCache;
   }
@@ -37,27 +53,45 @@ async function fetchExchangeRates() {
   try {
     const response = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
     const data = await response.json();
-    
+
     exchangeRatesCache = {
       base: 'USD',
       rates: data.rates,
       timestamp: new Date(data.date).toISOString(),
     };
     lastFetchTime = now;
-    
+
     return exchangeRatesCache;
   } catch (error) {
     console.error('Failed to fetch exchange rates:', error);
     return exchangeRatesCache || {
       base: 'USD',
-      rates: { MXN: 17.5, GTQ: 7.8, HND: 24.5, DOP: 58.2 },
+      rates: {
+        MXN: 17.5, GTQ: 7.8, HNL: 24.5, DOP: 58.2,
+        COP: 4100, PEN: 3.7, NIO: 36.5, CRC: 510
+      },
       timestamp: new Date().toISOString(),
     };
   }
 }
 
-// Generate HTML for transfer receipt
-function generateTransferReceiptHtml(transfer: any): string {
+// Mock MyBambu API - simulate transfer processing
+function simulateMyBambuTransfer(transferData: any) {
+  // In production, this would call the real MyBambu API
+  // For now, we'll simulate a successful transfer
+  const statuses = ['pending', 'processing', 'completed'];
+  const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
+
+  return {
+    success: true,
+    mybambuTransferId: `BAMBU-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    status: randomStatus,
+    estimatedDelivery: new Date(Date.now() + 35 * 60 * 1000).toISOString(),
+  };
+}
+
+// Component resources - these are the interactive widgets
+function getTransferReceiptComponent(): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -66,44 +100,69 @@ function generateTransferReceiptHtml(transfer: any): string {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       padding: 20px;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       min-height: 100vh;
+      color: #333;
     }
     .receipt {
       background: white;
-      border-radius: 16px;
-      padding: 24px;
+      border-radius: 20px;
+      padding: 28px;
       max-width: 500px;
       margin: 0 auto;
       box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      animation: slideUp 0.4s ease-out;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .header {
       text-align: center;
       padding-bottom: 20px;
       border-bottom: 2px solid #f0f0f0;
     }
+    .mybambu-logo {
+      font-size: 24px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
     .status {
       display: inline-block;
       padding: 8px 16px;
       border-radius: 20px;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       margin-top: 12px;
-      background: #fff3cd;
-      color: #856404;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
+    .status-pending { background: #fff3cd; color: #856404; }
+    .status-processing { background: #cfe2ff; color: #084298; }
+    .status-completed { background: #d1e7dd; color: #0f5132; }
     .amount-section {
       text-align: center;
-      padding: 30px 0;
+      padding: 32px 0;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+      border-radius: 16px;
+      margin: 20px 0;
     }
     .amount {
-      font-size: 48px;
-      font-weight: 700;
-      color: #667eea;
+      font-size: 52px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.2;
     }
-    .currency { font-size: 24px; color: #888; }
+    .currency { font-size: 24px; color: #666; font-weight: 600; margin-top: 4px; }
     .details {
       background: #f8f9fa;
       border-radius: 12px;
@@ -115,73 +174,182 @@ function generateTransferReceiptHtml(transfer: any): string {
       justify-content: space-between;
       padding: 12px 0;
       border-bottom: 1px solid #e0e0e0;
+      align-items: center;
     }
     .detail-row:last-child { border-bottom: none; }
     .label { color: #666; font-size: 14px; }
-    .value { font-weight: 600; color: #333; }
+    .value { font-weight: 600; color: #333; text-align: right; }
     .recipient {
       text-align: center;
-      padding: 20px 0;
+      padding: 24px;
       font-size: 18px;
       color: #333;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+      border-radius: 12px;
+      margin: 20px 0;
+    }
+    .recipient-name {
+      font-size: 22px;
+      font-weight: 700;
+      margin: 8px 0;
+      color: #667eea;
     }
     .transfer-id {
       text-align: center;
       color: #999;
-      font-size: 12px;
+      font-size: 11px;
       margin-top: 20px;
-      font-family: monospace;
+      font-family: 'Courier New', monospace;
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+    .actions {
+      margin-top: 24px;
+      display: flex;
+      gap: 12px;
+    }
+    button {
+      flex: 1;
+      padding: 14px 20px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+    }
+    .btn-secondary {
+      background: #f8f9fa;
+      color: #333;
+      border: 2px solid #e0e0e0;
+    }
+    .btn-secondary:hover {
+      background: #e9ecef;
+    }
+    @media (max-width: 480px) {
+      body { padding: 12px; }
+      .receipt { padding: 20px; }
+      .amount { font-size: 42px; }
     }
   </style>
 </head>
 <body>
-  <div class="receipt">
+  <div class="receipt" id="receipt">
     <div class="header">
-      <h1>💸 Transfer Receipt</h1>
-      <div class="status">${transfer.status.toUpperCase()}</div>
+      <div class="mybambu-logo">MyBambu</div>
+      <h2 style="color: #333; font-size: 20px;">💸 Transfer Receipt</h2>
+      <div class="status" id="status">PENDING</div>
     </div>
-    
-    <div class="amount-section">
-      <div class="amount">${transfer.recipient_amount.toFixed(2)}</div>
-      <div class="currency">${transfer.to_currency}</div>
-    </div>
-    
+
     <div class="recipient">
-      To: <strong>${transfer.recipient_name}</strong><br>
-      ${transfer.recipient_country}
+      <div style="font-size: 14px; color: #666;">Sending to</div>
+      <div class="recipient-name" id="recipientName">Loading...</div>
+      <div style="font-size: 16px; color: #666; margin-top: 4px;" id="recipientCountry">Loading...</div>
     </div>
-    
+
+    <div class="amount-section">
+      <div style="font-size: 14px; color: #666; margin-bottom: 8px;">They receive</div>
+      <div class="amount" id="amount">0.00</div>
+      <div class="currency" id="currency">USD</div>
+    </div>
+
     <div class="details">
       <div class="detail-row">
         <span class="label">You sent</span>
-        <span class="value">${transfer.amount} ${transfer.from_currency}</span>
+        <span class="value" id="sentAmount">$0.00</span>
       </div>
       <div class="detail-row">
-        <span class="label">Fee</span>
-        <span class="value">${transfer.fee.toFixed(2)} ${transfer.from_currency}</span>
+        <span class="label">Transfer fee</span>
+        <span class="value" id="fee">$0.00</span>
       </div>
       <div class="detail-row">
         <span class="label">Exchange rate</span>
-        <span class="value">1 ${transfer.from_currency} = ${transfer.exchange_rate} ${transfer.to_currency}</span>
+        <span class="value" id="rate">1 USD = 0.00</span>
       </div>
       <div class="detail-row">
-        <span class="label">Recipient gets</span>
-        <span class="value">${transfer.recipient_amount.toFixed(2)} ${transfer.to_currency}</span>
+        <span class="label">Delivery time</span>
+        <span class="value" id="delivery">35 minutes</span>
       </div>
       <div class="detail-row">
-        <span class="label">Delivery</span>
-        <span class="value">1-3 business days</span>
+        <span class="label">Estimated arrival</span>
+        <span class="value" id="arrival">Calculating...</span>
       </div>
     </div>
-    
-    <div class="transfer-id">ID: ${transfer.id}</div>
+
+    <div class="actions">
+      <button class="btn-secondary" onclick="checkStatus()">Check Status</button>
+      <button class="btn-primary" onclick="viewHistory()">View History</button>
+    </div>
+
+    <div class="transfer-id" id="transferId">ID: Loading...</div>
   </div>
+
+  <script>
+    // Access window.openai provided by ChatGPT Apps SDK
+    function render() {
+      if (!window.openai || !window.openai.toolOutput) {
+        setTimeout(render, 100);
+        return;
+      }
+
+      const data = window.openai.toolOutput;
+
+      // Update all fields with transfer data
+      document.getElementById('recipientName').textContent = data.recipient_name;
+      document.getElementById('recipientCountry').textContent = data.recipient_country;
+      document.getElementById('amount').textContent = data.recipient_amount.toFixed(2);
+      document.getElementById('currency').textContent = data.to_currency;
+      document.getElementById('sentAmount').textContent = \`$\${data.amount.toFixed(2)} \${data.from_currency}\`;
+      document.getElementById('fee').textContent = \`$\${data.fee.toFixed(2)} \${data.from_currency}\`;
+      document.getElementById('rate').textContent = \`1 \${data.from_currency} = \${data.exchange_rate.toFixed(4)} \${data.to_currency}\`;
+      document.getElementById('delivery').textContent = data.delivery_time;
+      document.getElementById('arrival').textContent = new Date(data.estimated_arrival).toLocaleString();
+      document.getElementById('transferId').textContent = \`ID: \${data.id}\`;
+
+      // Update status with proper styling
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = data.status.toUpperCase();
+      statusEl.className = 'status status-' + data.status;
+    }
+
+    // Interactive actions using window.openai.callTool
+    async function checkStatus() {
+      if (window.openai && window.openai.callTool) {
+        const data = window.openai.toolOutput;
+        await window.openai.callTool({
+          name: 'check_transfer_status',
+          input: { transfer_id: data.id }
+        });
+      }
+    }
+
+    async function viewHistory() {
+      if (window.openai && window.openai.sendFollowUpMessage) {
+        await window.openai.sendFollowUpMessage({
+          role: 'user',
+          content: 'Show me my transfer history'
+        });
+      }
+    }
+
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', render);
+    window.addEventListener('openai:set_globals', render);
+  </script>
 </body>
 </html>`;
 }
 
-// Generate HTML for exchange rate card
-function generateExchangeRateHtml(data: any): string {
+function getExchangeRateComponent(): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -197,47 +365,341 @@ function generateExchangeRateHtml(data: any): string {
     }
     .rate-card {
       background: white;
-      border-radius: 16px;
+      border-radius: 20px;
       padding: 32px;
-      max-width: 400px;
+      max-width: 420px;
       margin: 0 auto;
       box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      animation: fadeIn 0.4s ease-out;
     }
-    .title { text-align: center; color: #333; margin-bottom: 24px; font-size: 18px; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .mybambu-logo {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    .title {
+      text-align: center;
+      color: #333;
+      margin-bottom: 28px;
+      font-size: 18px;
+      font-weight: 600;
+    }
     .rate-display {
       text-align: center;
-      padding: 30px 0;
+      padding: 36px 24px;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      border-radius: 12px;
+      border-radius: 16px;
       color: white;
+      position: relative;
+      overflow: hidden;
     }
-    .rate-value {
-      font-size: 56px;
-      font-weight: 700;
-      margin: 16px 0;
+    .rate-display::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+      animation: pulse 3s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.5; }
+      50% { transform: scale(1.1); opacity: 0.8; }
     }
     .currencies {
-      font-size: 20px;
+      font-size: 22px;
+      opacity: 0.95;
+      font-weight: 600;
+      position: relative;
+      z-index: 1;
+    }
+    .rate-value {
+      font-size: 64px;
+      font-weight: 800;
+      margin: 20px 0;
+      position: relative;
+      z-index: 1;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+    .arrow {
+      font-size: 28px;
+      margin: 12px 0;
       opacity: 0.9;
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .info-box {
+      background: #f8f9fa;
+      padding: 16px;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .info-label {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .info-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #333;
     }
     .timestamp {
       text-align: center;
       color: #999;
       font-size: 12px;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0e0;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
       margin-top: 20px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
     }
   </style>
 </head>
 <body>
   <div class="rate-card">
+    <div class="mybambu-logo">MyBambu</div>
     <h2 class="title">💱 Live Exchange Rate</h2>
     <div class="rate-display">
-      <div class="currencies">1 ${data.from_currency}</div>
-      <div class="rate-value">${data.rate.toFixed(4)}</div>
-      <div class="currencies">${data.to_currency}</div>
+      <div class="currencies" id="fromCurrency">1 USD</div>
+      <div class="arrow">↓</div>
+      <div class="rate-value" id="rateValue">0.0000</div>
+      <div class="currencies" id="toCurrency">MXN</div>
     </div>
-    <div class="timestamp">Updated: ${new Date(data.timestamp).toLocaleString()}</div>
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="info-label">Our Fee</div>
+        <div class="info-value">$0.85+</div>
+      </div>
+      <div class="info-box">
+        <div class="info-label">Delivery</div>
+        <div class="info-value" id="deliveryTime">35 min</div>
+      </div>
+    </div>
+    <button onclick="sendMoney()">Send Money Now</button>
+    <div class="timestamp" id="timestamp">Updated: Loading...</div>
   </div>
+
+  <script>
+    function render() {
+      if (!window.openai || !window.openai.toolOutput) {
+        setTimeout(render, 100);
+        return;
+      }
+
+      const data = window.openai.toolOutput;
+
+      document.getElementById('fromCurrency').textContent = \`1 \${data.from_currency}\`;
+      document.getElementById('rateValue').textContent = data.rate.toFixed(4);
+      document.getElementById('toCurrency').textContent = data.to_currency;
+      document.getElementById('timestamp').textContent = \`Updated: \${new Date(data.timestamp).toLocaleString()}\`;
+
+      if (data.delivery_time) {
+        document.getElementById('deliveryTime').textContent = data.delivery_time;
+      }
+    }
+
+    async function sendMoney() {
+      if (window.openai && window.openai.sendFollowUpMessage) {
+        const data = window.openai.toolOutput;
+        await window.openai.sendFollowUpMessage({
+          role: 'user',
+          content: \`Send money from \${data.from_currency} to \${data.to_currency}\`
+        });
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', render);
+    window.addEventListener('openai:set_globals', render);
+  </script>
+</body>
+</html>`;
+}
+
+function getTransferHistoryComponent(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 28px;
+      max-width: 600px;
+      margin: 0 auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #f0f0f0;
+    }
+    h1 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #666;
+    }
+    .transfer-item {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border-left: 4px solid transparent;
+    }
+    .transfer-item:hover {
+      transform: translateX(4px);
+      border-left-color: #667eea;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .transfer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .transfer-amount {
+      font-size: 24px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    .transfer-status {
+      padding: 6px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .status-completed { background: #d1e7dd; color: #0f5132; }
+    .status-pending { background: #fff3cd; color: #856404; }
+    .status-processing { background: #cfe2ff; color: #084298; }
+    .transfer-details {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      color: #666;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+    }
+    .empty-state-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📋 Transfer History</h1>
+      <p class="subtitle" id="subtitle">Loading your transfers...</p>
+    </div>
+    <div id="transferList"></div>
+  </div>
+
+  <script>
+    function render() {
+      if (!window.openai || !window.openai.toolOutput) {
+        setTimeout(render, 100);
+        return;
+      }
+
+      const data = window.openai.toolOutput;
+      const transfers = data.transfers || [];
+
+      document.getElementById('subtitle').textContent =
+        transfers.length > 0
+          ? \`\${transfers.length} transfer\${transfers.length !== 1 ? 's' : ''} found\`
+          : 'No transfers yet';
+
+      const listEl = document.getElementById('transferList');
+
+      if (transfers.length === 0) {
+        listEl.innerHTML = \`
+          <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <p>No transfers yet</p>
+            <p style="font-size: 12px; margin-top: 8px;">Start by sending money to your loved ones</p>
+          </div>
+        \`;
+        return;
+      }
+
+      listEl.innerHTML = transfers.map(t => \`
+        <div class="transfer-item" onclick="viewTransfer('\${t.id}')">
+          <div class="transfer-header">
+            <span class="transfer-amount">\${t.recipient_amount.toFixed(2)} \${t.to_currency}</span>
+            <span class="transfer-status status-\${t.status}">\${t.status}</span>
+          </div>
+          <div class="transfer-details">
+            <span>To: \${t.recipient_name}</span>
+            <span>\${new Date(t.created_at).toLocaleDateString()}</span>
+          </div>
+        </div>
+      \`).join('');
+    }
+
+    async function viewTransfer(id) {
+      if (window.openai && window.openai.callTool) {
+        await window.openai.callTool({
+          name: 'check_transfer_status',
+          input: { transfer_id: id }
+        });
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', render);
+    window.addEventListener('openai:set_globals', render);
+  </script>
 </body>
 </html>`;
 }
@@ -245,76 +707,247 @@ function generateExchangeRateHtml(data: any): string {
 // Create MCP server
 function createTransfersServer(): Server {
   const server = new Server(
-    { name: "transfers-node", version: "0.1.0" },
-    { capabilities: { tools: {} } }
+    {
+      name: "mybambu-transfers",
+      version: "1.0.0"
+    },
+    {
+      capabilities: {
+        tools: {},
+        resources: {}
+      }
+    }
   );
 
+  // Register component resources
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: [
+      {
+        uri: "component://transfer-receipt",
+        name: "Transfer Receipt Widget",
+        mimeType: "text/html+skybridge",
+        description: "Interactive transfer receipt with status tracking"
+      },
+      {
+        uri: "component://exchange-rate",
+        name: "Exchange Rate Widget",
+        mimeType: "text/html+skybridge",
+        description: "Live exchange rate display"
+      },
+      {
+        uri: "component://transfer-history",
+        name: "Transfer History Widget",
+        mimeType: "text/html+skybridge",
+        description: "Transfer history list"
+      }
+    ]
+  }));
+
+  // Serve component HTML
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const uri = request.params.uri;
+
+    let html = '';
+    if (uri === "component://transfer-receipt") {
+      html = getTransferReceiptComponent();
+    } else if (uri === "component://exchange-rate") {
+      html = getExchangeRateComponent();
+    } else if (uri === "component://transfer-history") {
+      html = getTransferHistoryComponent();
+    } else {
+      throw new Error(`Unknown resource: ${uri}`);
+    }
+
+    return {
+      contents: [{
+        uri,
+        mimeType: "text/html+skybridge",
+        text: html
+      }]
+    };
+  });
+
+  // Register tools with proper metadata
   server.setRequestHandler(ListToolsRequestSchema, async (_request: ListToolsRequest) => ({
     tools: [
       {
         name: "send_money",
-        description: "Send money internationally with real-time exchange rates",
+        description: "Use this when the user wants to send money internationally through MyBambu. Supports transfers to 17+ Latin American countries with low fees starting at $0.85 and delivery in as fast as 35 minutes.",
         inputSchema: {
           type: "object",
           properties: {
-            from_currency: { type: "string", description: "Source currency (USD, MXN, etc.)" },
-            to_currency: { type: "string", description: "Destination currency" },
-            amount: { type: "number", description: "Amount to send" },
-            recipient_name: { type: "string", description: "Recipient name" },
-            recipient_country: { type: "string", description: "Recipient country" },
+            amount: {
+              type: "number",
+              description: "Amount to send in USD (minimum $1, maximum $5000 per transaction)"
+            },
+            to_country: {
+              type: "string",
+              description: "Destination country (e.g., Mexico, Guatemala, Honduras, Dominican Republic, Colombia, Peru, etc.)"
+            },
+            recipient_name: {
+              type: "string",
+              description: "Full name of the recipient"
+            },
           },
-          required: ["from_currency", "to_currency", "amount", "recipient_name", "recipient_country"],
+          required: ["amount", "to_country", "recipient_name"],
         },
+        _meta: {
+          "openai/outputTemplate": "component://transfer-receipt",
+          "openai/toolInvocation": {
+            invoking: "Processing your transfer with MyBambu...",
+            invoked: "Transfer initiated successfully!"
+          },
+          readOnlyHint: false,
+          destructiveHint: false
+        }
       },
       {
         name: "get_exchange_rate",
-        description: "Get real-time exchange rate between currencies",
+        description: "Use this when the user wants to check the current exchange rate between USD and another currency. Provides live rates updated hourly with fee information and estimated delivery times.",
         inputSchema: {
           type: "object",
           properties: {
-            from_currency: { type: "string", description: "Source currency" },
-            to_currency: { type: "string", description: "Destination currency" },
+            to_currency: {
+              type: "string",
+              description: "Destination currency code (MXN, GTQ, HNL, DOP, COP, PEN, etc.)"
+            },
+            to_country: {
+              type: "string",
+              description: "Destination country name (optional, helps determine delivery time)"
+            }
           },
-          required: ["from_currency", "to_currency"],
+          required: ["to_currency"],
         },
+        _meta: {
+          "openai/outputTemplate": "component://exchange-rate",
+          "openai/toolInvocation": {
+            invoking: "Fetching live exchange rates...",
+            invoked: "Exchange rate retrieved"
+          },
+          readOnlyHint: true
+        }
       },
+      {
+        name: "check_transfer_status",
+        description: "Use this when the user wants to check the status of a specific transfer by transfer ID. Returns current status, delivery progress, and estimated arrival time.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            transfer_id: {
+              type: "string",
+              description: "Transfer ID (format: TXN-XXXX)"
+            },
+          },
+          required: ["transfer_id"],
+        },
+        _meta: {
+          "openai/outputTemplate": "component://transfer-receipt",
+          "openai/toolInvocation": {
+            invoking: "Checking transfer status...",
+            invoked: "Status updated"
+          },
+          readOnlyHint: true
+        }
+      },
+      {
+        name: "get_transfer_history",
+        description: "Use this when the user wants to view their past transfers. Shows all transfers with their status, amounts, recipients, and dates.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            limit: {
+              type: "number",
+              description: "Maximum number of transfers to return (default: 10)"
+            },
+          },
+        },
+        _meta: {
+          "openai/outputTemplate": "component://transfer-history",
+          "openai/toolInvocation": {
+            invoking: "Loading your transfer history...",
+            invoked: "History loaded"
+          },
+          readOnlyHint: true
+        }
+      },
+      {
+        name: "get_supported_countries",
+        description: "Use this when the user asks which countries MyBambu supports for money transfers. Returns a list of all supported corridors with delivery times and currencies.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+        _meta: {
+          "openai/toolInvocation": {
+            invoking: "Fetching supported countries...",
+            invoked: "Countries list retrieved"
+          },
+          readOnlyHint: true
+        }
+      }
     ],
   }));
 
+  // Handle tool calls
   server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) => {
     const toolName = request.params.name;
     const args = request.params.arguments ?? {};
 
+    // TOOL: send_money
     if (toolName === "send_money") {
-      const { from_currency, to_currency, amount, recipient_name, recipient_country } = args as any;
+      const { amount, to_country, recipient_name } = args as any;
 
+      // Validation
       if (amount <= 0) {
-        return { content: [{ type: "text", text: "Amount must be greater than 0" }] };
+        return {
+          content: [{
+            type: "text",
+            text: "❌ Amount must be greater than $0"
+          }],
+          isError: true
+        };
       }
 
       if (amount > transferLimits.perTransaction) {
         return {
           content: [{
             type: "text",
-            text: `Amount exceeds per-transaction limit of ${transferLimits.perTransaction} ${from_currency}`,
+            text: `❌ Amount exceeds per-transaction limit of $${transferLimits.perTransaction}. Please split into multiple transfers or contact support.`,
           }],
+          isError: true
         };
       }
 
+      // Find country info
+      const corridor = SUPPORTED_CORRIDORS.find(c =>
+        c.country.toLowerCase() === to_country.toLowerCase()
+      );
+
+      if (!corridor) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Sorry, we don't support transfers to ${to_country} yet. Supported countries: ${SUPPORTED_CORRIDORS.map(c => c.country).join(', ')}`,
+          }],
+          isError: true
+        };
+      }
+
+      // Get exchange rate
       const rateData = await fetchExchangeRates();
-      const rate = from_currency === 'USD' 
-        ? rateData.rates[to_currency]
-        : rateData.rates[to_currency] / rateData.rates[from_currency];
+      const rate = rateData.rates[corridor.currency];
 
       if (!rate) {
         return {
           content: [{
             type: "text",
-            text: `Exchange rate not available for ${from_currency} to ${to_currency}`,
+            text: `❌ Exchange rate not available for ${corridor.currency}`,
           }],
+          isError: true
         };
       }
 
+      // Calculate fees
       const feeAmount = Math.max(
         transferLimits.fees.minFee,
         Math.min(amount * transferLimits.fees.standard, transferLimits.fees.maxFee)
@@ -323,53 +956,178 @@ function createTransfersServer(): Server {
       const recipientAmount = netAmount * rate;
       const transferId = `TXN-${transferCounter++}`;
 
+      // Simulate MyBambu API call
+      const mybambuResponse = simulateMyBambuTransfer({
+        amount,
+        to_country,
+        recipient_name,
+        currency: corridor.currency
+      });
+
+      // Create transfer record
       const transfer = {
         id: transferId,
-        from_currency,
-        to_currency,
+        mybambu_id: mybambuResponse.mybambuTransferId,
+        from_currency: 'USD',
+        to_currency: corridor.currency,
         amount,
         fee: feeAmount,
         net_amount: netAmount,
         exchange_rate: rate,
         recipient_amount: recipientAmount,
         recipient_name,
-        recipient_country,
-        status: "pending",
+        recipient_country: corridor.country,
+        delivery_time: corridor.deliveryTime,
+        status: mybambuResponse.status,
+        estimated_arrival: mybambuResponse.estimatedDelivery,
         created_at: new Date().toISOString(),
       };
 
       transfers.set(transferId, transfer);
 
+      // Return structured response
       return {
         content: [{
           type: "text",
-          text: `✅ Transfer created! ${recipient_name} will receive ${recipientAmount.toFixed(2)} ${to_currency}. Fee: ${feeAmount.toFixed(2)} ${from_currency}. ID: ${transferId}`,
+          text: `✅ Transfer initiated! ${recipient_name} in ${corridor.country} will receive ${recipientAmount.toFixed(2)} ${corridor.currency}. Estimated delivery: ${corridor.deliveryTime}. Transfer ID: ${transferId}`
         }],
+        structuredContent: transfer,
+        _meta: {
+          mybambuResponse,
+          feeBreakdown: {
+            baseAmount: amount,
+            feePercentage: transferLimits.fees.standard,
+            feeAmount,
+            netAmount,
+            exchangeRate: rate,
+            finalAmount: recipientAmount
+          }
+        }
       };
     }
 
+    // TOOL: get_exchange_rate
     if (toolName === "get_exchange_rate") {
-      const { from_currency, to_currency } = args as any;
+      const { to_currency, to_country } = args as any;
 
       const rateData = await fetchExchangeRates();
-      const rate = from_currency === 'USD'
-        ? rateData.rates[to_currency]
-        : rateData.rates[to_currency] / rateData.rates[from_currency];
+      const rate = rateData.rates[to_currency];
 
       if (!rate) {
         return {
           content: [{
             type: "text",
-            text: `Exchange rate not available for ${from_currency} to ${to_currency}`,
+            text: `❌ Exchange rate not available for ${to_currency}`,
           }],
+          isError: true
         };
+      }
+
+      // Find corridor for delivery time
+      const corridor = SUPPORTED_CORRIDORS.find(c =>
+        c.currency === to_currency ||
+        (to_country && c.country.toLowerCase() === to_country.toLowerCase())
+      );
+
+      const responseData = {
+        from_currency: 'USD',
+        to_currency,
+        rate,
+        timestamp: rateData.timestamp,
+        delivery_time: corridor?.deliveryTime || '1-3 hours'
+      };
+
+      return {
+        content: [{
+          type: "text",
+          text: `💱 Current rate: 1 USD = ${rate.toFixed(4)} ${to_currency}\n\n📦 Delivery time: ${responseData.delivery_time}\n💰 Our fee: Starting at $0.85\n\nLast updated: ${new Date(rateData.timestamp).toLocaleString()}`
+        }],
+        structuredContent: responseData,
+        _meta: {
+          rawRateData: rateData,
+          corridor
+        }
+      };
+    }
+
+    // TOOL: check_transfer_status
+    if (toolName === "check_transfer_status") {
+      const { transfer_id } = args as any;
+
+      const transfer = transfers.get(transfer_id);
+
+      if (!transfer) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Transfer not found: ${transfer_id}. Please check the transfer ID and try again.`,
+          }],
+          isError: true
+        };
+      }
+
+      // Simulate status progression
+      const statuses = ['pending', 'processing', 'completed'];
+      const currentIndex = statuses.indexOf(transfer.status);
+      if (currentIndex < statuses.length - 1 && Math.random() > 0.5) {
+        transfer.status = statuses[currentIndex + 1];
       }
 
       return {
         content: [{
           type: "text",
-          text: `💱 Current rate: 1 ${from_currency} = ${rate.toFixed(4)} ${to_currency}\n\nLast updated: ${new Date(rateData.timestamp).toLocaleString()}`,
+          text: `📊 Transfer Status: ${transfer.status.toUpperCase()}\n\n💸 ${transfer.recipient_amount.toFixed(2)} ${transfer.to_currency} to ${transfer.recipient_name}\n📅 Estimated arrival: ${new Date(transfer.estimated_arrival).toLocaleString()}\n🆔 ${transfer.id}`
         }],
+        structuredContent: transfer,
+        _meta: {
+          statusHistory: [
+            { status: 'pending', timestamp: transfer.created_at },
+            { status: transfer.status, timestamp: new Date().toISOString() }
+          ]
+        }
+      };
+    }
+
+    // TOOL: get_transfer_history
+    if (toolName === "get_transfer_history") {
+      const { limit = 10 } = args as any;
+
+      const allTransfers = Array.from(transfers.values())
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, limit);
+
+      return {
+        content: [{
+          type: "text",
+          text: allTransfers.length > 0
+            ? `📋 Found ${allTransfers.length} transfer${allTransfers.length !== 1 ? 's' : ''}:\n\n` +
+              allTransfers.map(t =>
+                `• ${t.recipient_amount.toFixed(2)} ${t.to_currency} to ${t.recipient_name} - ${t.status.toUpperCase()} (${t.id})`
+              ).join('\n')
+            : `📭 No transfers found. Start by saying "Send $100 to Mexico"`
+        }],
+        structuredContent: {
+          transfers: allTransfers,
+          total: allTransfers.length
+        }
+      };
+    }
+
+    // TOOL: get_supported_countries
+    if (toolName === "get_supported_countries") {
+      return {
+        content: [{
+          type: "text",
+          text: `🌎 MyBambu supports transfers to ${SUPPORTED_CORRIDORS.length} countries:\n\n` +
+            SUPPORTED_CORRIDORS.map(c =>
+              `• ${c.country} (${c.currency}) - Delivery: ${c.deliveryTime}`
+            ).join('\n') +
+            `\n\n💰 Low fees starting at $0.85\n⚡ Fast delivery in as little as 35 minutes`
+        }],
+        structuredContent: {
+          corridors: SUPPORTED_CORRIDORS,
+          total: SUPPORTED_CORRIDORS.length
+        }
       };
     }
 
@@ -477,9 +1235,17 @@ httpServer.on("clientError", (err: Error, socket) => {
 });
 
 httpServer.listen(port, () => {
-  console.log(`🚀 Transfers MCP server with REAL-TIME rates!`);
-  console.log(`   http://localhost:${port}`);
-  console.log(`   SSE: GET http://localhost:${port}${ssePath}`);
-  console.log(`   POST: http://localhost:${port}${postPath}?sessionId=...`);
-  console.log(`\n💡 Expose with: lt --port ${port}`);
+  console.log(`\n🚀 MyBambu Transfers - MCP Server Ready!`);
+  console.log(`   Version: 1.0.0`);
+  console.log(`   Port: ${port}`);
+  console.log(`   SSE Endpoint: http://localhost:${port}${ssePath}`);
+  console.log(`   POST Endpoint: http://localhost:${port}${postPath}?sessionId=...`);
+  console.log(`\n💡 Supported Features:`);
+  console.log(`   • Send money to 17+ Latin American countries`);
+  console.log(`   • Live exchange rates (updated hourly)`);
+  console.log(`   • Transfer status tracking`);
+  console.log(`   • Transfer history`);
+  console.log(`   • Interactive widgets with window.openai`);
+  console.log(`\n🔗 To expose publicly: npx ngrok http ${port}`);
+  console.log(`   or use: npx localtunnel --port ${port}\n`);
 });
