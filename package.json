@@ -1,11 +1,43 @@
 {
-  "name": "transfers-server-node",
-  "version": "0.1.0",
+  "name": "mybambu-chatgpt-transfers",
+  "version": "1.0.0",
+  "description": "Production-ready MCP server for international money transfers through ChatGPT. Send money globally with low fees, live exchange rates, and beautiful interactive widgets.",
   "type": "module",
   "main": "./src/server.ts",
+  "keywords": [
+    "chatgpt",
+    "mcp",
+    "model-context-protocol",
+    "money-transfer",
+    "remittance",
+    "mybambu",
+    "international-payments",
+    "exchange-rates",
+    "openai-apps-sdk"
+  ],
+  "author": {
+    "name": "Edison Espinosa",
+    "url": "https://github.com/edisonjoao1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edisonjoao1/chatgpt-transfers.git"
+  },
+  "bugs": {
+    "url": "https://github.com/edisonjoao1/chatgpt-transfers/issues"
+  },
+  "homepage": "https://github.com/edisonjoao1/chatgpt-transfers#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
   "scripts": {
     "start": "tsx src/server.ts",
-    "dev": "tsx watch src/server.ts"
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "test": "echo \"Tests coming soon\" && exit 0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

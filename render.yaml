@@ -1,9 +1,17 @@
 services:
   - type: web
-    name: chatgpt-transfers
+    name: mybambu-chatgpt-transfers
     runtime: node
-    buildCommand: npm install
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run lint
     startCommand: npm start
+    healthCheckPath: /mcp
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: 20.19.5
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8000
