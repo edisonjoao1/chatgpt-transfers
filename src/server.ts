@@ -1235,7 +1235,7 @@ function getScheduledTransfersComponent(): string {
             </div>
             <div class="schedule-detail-row">
               <span style="color: #999;">Country:</span>
-              <span>\${s.country} (\${s.currency})</span>
+              <span>\${s.recipient_country} (\${s.currency_to})</span>
             </div>
             <div class="schedule-detail-row">
               <span style="color: #999;">Next Transfer:</span>
@@ -2019,7 +2019,7 @@ function createTransfersServer(): Server {
 
     // TOOL: schedule_transfer
     if (toolName === "schedule_transfer") {
-      const { amount, recipient_id, frequency, start_date } = args as any;
+      const { amount, to_country, recipient_name, frequency, start_date } = args as any;
 
       // Validation
       if (amount <= 0) {
@@ -2032,22 +2032,26 @@ function createTransfersServer(): Server {
         };
       }
 
-      if (!recipient_id) {
+      if (!to_country || !recipient_name) {
         return {
           content: [{
             type: "text",
-            text: "❌ Please specify a recipient. First save a recipient by saying 'Add Maria in Mexico'"
+            text: "❌ Please specify both recipient name and country"
           }],
           isError: true
         };
       }
 
-      const recipient = recipients.get(recipient_id);
-      if (!recipient) {
+      // Find country info
+      const corridor = SUPPORTED_CORRIDORS.find(c =>
+        c.country.toLowerCase() === to_country.toLowerCase()
+      );
+
+      if (!corridor) {
         return {
           content: [{
             type: "text",
-            text: `❌ Recipient not found: ${recipient_id}. Please add them first.`
+            text: `❌ Sorry, we don't support transfers to ${to_country} yet. Supported countries: ${SUPPORTED_CORRIDORS.map(c => c.country).join(', ')}`
           }],
           isError: true
         };
@@ -2068,12 +2072,11 @@ function createTransfersServer(): Server {
       const scheduleId = `SCH-${scheduledCounter++}`;
       const scheduledTransfer = {
         id: scheduleId,
-        recipient_id,
-        recipient_name: recipient.name,
-        recipient_country: recipient.country,
+        recipient_name,
+        recipient_country: corridor.country,
         amount,
         currency_from: 'USD',
-        currency_to: recipient.currency,
+        currency_to: corridor.currency,
         frequency,
         start_date: start_date || new Date().toISOString(),
         next_execution: start_date || new Date().toISOString(),
@@ -2091,7 +2094,7 @@ function createTransfersServer(): Server {
       return {
         content: [{
           type: "text",
-          text: `✅ Scheduled transfer created! ${recipient.name} will receive $${amount} ${frequency}.\n\n📅 Next 3 payments:\n` +
+          text: `✅ Scheduled transfer created! ${recipient_name} in ${corridor.country} will receive $${amount} ${frequency}.\n\n📅 Next 3 payments:\n` +
             nextDates.map((d, i) => `  ${i + 1}. ${new Date(d).toLocaleDateString()}`).join('\n') +
             `\n\n🆔 Schedule ID: ${scheduleId}`
         }],
@@ -2117,7 +2120,7 @@ function createTransfersServer(): Server {
             text: `📭 You don't have any scheduled transfers. Set one up by saying "Send $100 to Maria every month"`
           }],
           structuredContent: {
-            scheduledTransfers: [],
+            schedules: [],
             total: 0
           }
         };
@@ -2132,7 +2135,7 @@ function createTransfersServer(): Server {
             ).join('\n')
         }],
         structuredContent: {
-          scheduledTransfers: allScheduled,
+          schedules: allScheduled,
           total: allScheduled.length
         }
       };
