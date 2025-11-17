@@ -184,25 +184,45 @@ src/server.ts
 
 ## 📦 Deployment
 
-### Render (Current Setup)
+**This repository requires cloud deployment** as ChatGPT Custom GPTs need publicly accessible webhook URLs.
+
+### Railway (⭐ Recommended)
+
+Includes `railway.json` for seamless deployment:
+
+```bash
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Login and deploy
+railway login
+railway init
+railway up
+
+# Get your public URL
+railway domain
+```
+
+**Configure environment variables in Railway dashboard:**
+```bash
+MODE=PRODUCTION
+WISE_API_KEY=your_wise_api_key
+WISE_PROFILE_ID=your_profile_id
+WISE_API_URL=https://api.sandbox.transferwise.tech
+```
+
+### Render
 
 The repository includes `render.yaml` for one-click deployment:
 
 1. Push to GitHub
 2. Go to https://render.com
 3. New → Web Service
-4. Connect your GitHub repo
-5. Render auto-detects config from render.yaml
+4. Connect your GitHub repo: `chatgpt-transfers`
+5. Render auto-detects config from `render.yaml`
+6. Add environment variables in Render dashboard
 
-### Railway
-
-Includes `railway.json` for deployment:
-
-```bash
-npm install -g @railway/cli
-railway login
-railway up
-```
+**Expected URL:** `https://mybambu-chatgpt-transfers.onrender.com`
 
 ### Docker
 
@@ -210,6 +230,8 @@ railway up
 docker build -t mybambu-transfers .
 docker run -p 8000:8000 mybambu-transfers
 ```
+
+**For detailed deployment instructions**, see `DEPLOYMENT-GUIDE.md` in the main workspace.
 
 ## 🛠 Development
 
