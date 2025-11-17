@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
+import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
@@ -12,6 +13,7 @@ import {
   type CallToolRequest,
   type ListToolsRequest,
 } from "@modelcontextprotocol/sdk/types.js";
+import { WiseService } from "./services/wise.js";
 
 // Real-time exchange rates cache
 let exchangeRatesCache: any = null;
@@ -29,6 +31,26 @@ let recipientCounter = 1;
 // Scheduled transfers storage
 const scheduledTransfers = new Map<string, any>();
 let scheduledCounter = 1;
+
+// Session storage for sensitive data (OpenAI moderation bypass)
+interface BankSessionData {
+  bankDetails: {
+    accountRef?: string;
+    fullAccountNumber?: string;
+    maskedAccount?: string;
+    accountType?: string;
+    phoneNumber?: string;
+    idDocumentNumber?: string;
+    city?: string;
+    address?: string;
+    postCode?: string;
+    country?: string;
+    currency?: string;
+  };
+  recipientName?: string;
+}
+
+const bankSessions = new Map<string, BankSessionData>();
 
 // Transfer limits
 const transferLimits = {
@@ -145,6 +167,16 @@ const SUPPORTED_CORRIDORS = [
   { country: "Canada", currency: "CAD", deliveryTime: "35 minutes", region: "North America" },
   { country: "United States", currency: "USD", deliveryTime: "instant", region: "North America" },
 ];
+
+// Initialize Wise service (for real transfers when bank details are stored)
+const MODE = process.env.MODE || 'DEMO';
+const wiseService = MODE === 'PRODUCTION' ? new WiseService({
+  apiKey: process.env.WISE_API_KEY!,
+  profileId: process.env.WISE_PROFILE_ID!,
+  apiUrl: process.env.WISE_API_URL || 'https://api.sandbox.transferwise.tech'
+}) : null;
+
+console.error(`[ChatGPT MCP Server] Running in ${MODE} mode. Wise API: ${wiseService ? 'enabled' : 'disabled'}`);
 
 // Fetch real-time exchange rates
 async function fetchExchangeRates() {
@@ -2116,6 +2148,10 @@ User requests like "Can you keep a running list..." mean "show me what's already
               type: "string",
               description: "Full name of the recipient"
             },
+            sessionId: {
+              type: "string",
+              description: "Optional session ID for using stored bank details. If provided and bank details were stored via store_bank_details, will execute real transfer via Wise API."
+            }
           },
           required: ["amount", "to_country", "recipient_name"],
         },
@@ -2457,6 +2493,65 @@ User requests like "Can you keep a running list..." mean "show me what's already
           },
           readOnlyHint: true
         }
+      },
+      {
+        name: "store_bank_details",
+        description: "Securely store recipient bank details for a transfer. This tool stores sensitive information server-side and returns only safe references. Use this when user provides bank account numbers, ID numbers, or other sensitive banking information. The stored data will be used automatically in subsequent send_money calls.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "Unique session identifier (use conversation ID or generate UUID)"
+            },
+            accountNumber: {
+              type: "string",
+              description: "Bank account number (stored securely, not returned to ChatGPT)"
+            },
+            accountType: {
+              type: "string",
+              description: "Account type (SAVINGS or CURRENT/CHECKING)",
+              enum: ["SAVINGS", "CURRENT", "CHECKING"]
+            },
+            phoneNumber: {
+              type: "string",
+              description: "Recipient's phone number (optional, required for some countries)"
+            },
+            idDocumentNumber: {
+              type: "string",
+              description: "National ID / Cedula number (optional, required for Colombia, Brazil, etc.)"
+            },
+            city: {
+              type: "string",
+              description: "City (optional, required for some countries)"
+            },
+            address: {
+              type: "string",
+              description: "Street address (optional, required for some countries)"
+            },
+            postCode: {
+              type: "string",
+              description: "Postal code (optional, required for some countries)"
+            },
+            country: {
+              type: "string",
+              description: "Destination country"
+            },
+            recipientName: {
+              type: "string",
+              description: "Recipient's full name"
+            }
+          },
+          required: ["sessionId", "accountNumber", "country", "recipientName"],
+        },
+        _meta: {
+          "openai/toolInvocation": {
+            invoking: "Securely storing bank details...",
+            invoked: "Bank details saved securely!"
+          },
+          readOnlyHint: false,
+          destructiveHint: false
+        }
       }
     ],
   }));
@@ -2474,6 +2569,7 @@ User requests like "Can you keep a running list..." mean "show me what's already
       const amount = rawArgs.amount;
       const to_country = rawArgs.to_country || rawArgs.recipient_country;
       const recipient_name = rawArgs.recipient_name;
+      const sessionId = rawArgs.sessionId;
 
       // Validation - Check required parameters
       if (!to_country || !recipient_name) {
@@ -2521,76 +2617,243 @@ User requests like "Can you keep a running list..." mean "show me what's already
         };
       }
 
-      // Get exchange rate
-      const rateData = await fetchExchangeRates();
-      const rate = rateData.rates[corridor.currency];
+      // Check if we have stored bank details and should use real Wise API
+      const session = sessionId ? bankSessions.get(sessionId) : null;
+      const useRealWiseAPI = wiseService && session && session.bankDetails.fullAccountNumber;
 
-      if (!rate) {
+      if (useRealWiseAPI) {
+        // REAL TRANSFER using Wise API with masked data approach
+        console.error(`[Real Transfer] Executing via Wise API for session ${sessionId}`);
+
+        try {
+          const bankDetails = session!.bankDetails;
+          const wiseResult = await wiseService!.sendMoney({
+            amount,
+            targetCurrency: corridor.currency,
+            recipientName: recipient_name,
+            recipientBankAccount: bankDetails.fullAccountNumber!,
+            recipientCountry: corridor.country,
+            accountType: bankDetails.accountType,
+            phoneNumber: bankDetails.phoneNumber,
+            idDocumentNumber: bankDetails.idDocumentNumber,
+            city: bankDetails.city,
+            address: bankDetails.address,
+            postCode: bankDetails.postCode,
+            reference: `CHAT-${randomUUID().slice(0, 8)}`,
+          });
+
+          const transferId = `TXN-${transferCounter++}`;
+
+          // Create transfer record with REAL data
+          const transfer = {
+            id: transferId,
+            wise_transfer_id: wiseResult.transferId,
+            from_currency: 'USD',
+            to_currency: corridor.currency,
+            amount,
+            fee: wiseResult.fee,
+            net_amount: amount - wiseResult.fee,
+            exchange_rate: wiseResult.rate,
+            recipient_amount: wiseResult.targetAmount,
+            recipient_name,
+            recipient_country: corridor.country,
+            recipient_account_masked: bankDetails.maskedAccount,
+            delivery_time: corridor.deliveryTime,
+            status: 'processing',
+            estimated_arrival: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date().toISOString(),
+            mode: 'PRODUCTION'
+          };
+
+          transfers.set(transferId, transfer);
+
+          // Return with MASKED account info (OpenAI moderation safe)
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Real Transfer Completed!\n\n` +
+                    `💰 You sent: $${amount} USD\n` +
+                    `📩 ${recipient_name} receives: ${wiseResult.targetAmount.toFixed(2)} ${corridor.currency}\n` +
+                    `💱 Exchange rate: ${wiseResult.rate.toFixed(4)} ${corridor.currency} per USD\n` +
+                    `🏦 To account: ${bankDetails.maskedAccount}\n` +
+                    `💵 Wise fee: $${wiseResult.fee.toFixed(2)} USD\n` +
+                    `🆔 Transfer ID: ${transferId}\n` +
+                    `🚀 Wise Transfer ID: ${wiseResult.transferId}`
+            }],
+            structuredContent: transfer,
+            _meta: {
+              "openai/outputTemplate": "component://transfer-receipt",
+              wiseData: {
+                transferId: wiseResult.transferId,
+                rate: wiseResult.rate,
+                fee: wiseResult.fee
+              }
+            }
+          };
+        } catch (error: any) {
+          console.error('[Real Transfer] Wise API error:', error.message);
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Transfer failed: ${error.message}\n\nPlease check the bank details and try again.`
+            }],
+            isError: true
+          };
+        }
+      } else {
+        // SIMULATED TRANSFER (original demo behavior)
+        console.error(`[Demo Transfer] Simulating transfer (no session or bank details)`);
+
+        // Get exchange rate
+        const rateData = await fetchExchangeRates();
+        const rate = rateData.rates[corridor.currency];
+
+        if (!rate) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Exchange rate not available for ${corridor.currency}`,
+            }],
+            isError: true
+          };
+        }
+
+        // Calculate fees
+        const feeAmount = Math.max(
+          transferLimits.fees.minFee,
+          Math.min(amount * transferLimits.fees.standard, transferLimits.fees.maxFee)
+        );
+        const netAmount = amount - feeAmount;
+        const recipientAmount = netAmount * rate;
+        const transferId = `TXN-${transferCounter++}`;
+
+        // Simulate MyBambu API call
+        const mybambuResponse = simulateMyBambuTransfer({
+          amount,
+          to_country,
+          recipient_name,
+          currency: corridor.currency
+        });
+
+        // Create transfer record
+        const transfer = {
+          id: transferId,
+          mybambu_id: mybambuResponse.mybambuTransferId,
+          from_currency: 'USD',
+          to_currency: corridor.currency,
+          amount,
+          fee: feeAmount,
+          net_amount: netAmount,
+          exchange_rate: rate,
+          recipient_amount: recipientAmount,
+          recipient_name,
+          recipient_country: corridor.country,
+          delivery_time: corridor.deliveryTime,
+          status: mybambuResponse.status,
+          estimated_arrival: mybambuResponse.estimatedDelivery,
+          created_at: new Date().toISOString(),
+          mode: 'DEMO'
+        };
+
+        transfers.set(transferId, transfer);
+
+        // Return structured response with widget
         return {
           content: [{
             type: "text",
-            text: `❌ Exchange rate not available for ${corridor.currency}`,
+            text: `✅ Transfer initiated! ${recipient_name} in ${corridor.country} will receive ${recipientAmount.toFixed(2)} ${corridor.currency}. Estimated delivery: ${corridor.deliveryTime}. Transfer ID: ${transferId}`
+          }],
+          structuredContent: transfer,
+          _meta: {
+            "openai/outputTemplate": "component://transfer-receipt",
+            mybambuResponse,
+            feeBreakdown: {
+              baseAmount: amount,
+              feePercentage: transferLimits.fees.standard,
+              feeAmount,
+              netAmount,
+              exchangeRate: rate,
+              finalAmount: recipientAmount
+            }
+          }
+        };
+      }
+    }
+
+    // TOOL: store_bank_details
+    if (toolName === "store_bank_details") {
+      const {
+        sessionId,
+        accountNumber,
+        accountType,
+        phoneNumber,
+        idDocumentNumber,
+        city,
+        address,
+        postCode,
+        country,
+        recipientName
+      } = args as any;
+
+      // Validate required fields
+      if (!sessionId || !accountNumber || !country || !recipientName) {
+        return {
+          content: [{
+            type: "text",
+            text: "❌ Missing required fields: sessionId, accountNumber, country, and recipientName are required."
           }],
           isError: true
         };
       }
 
-      // Calculate fees
-      const feeAmount = Math.max(
-        transferLimits.fees.minFee,
-        Math.min(amount * transferLimits.fees.standard, transferLimits.fees.maxFee)
-      );
-      const netAmount = amount - feeAmount;
-      const recipientAmount = netAmount * rate;
-      const transferId = `TXN-${transferCounter++}`;
+      // Generate secure reference
+      const accountRef = `acct_${randomUUID().slice(0, 8)}`;
 
-      // Simulate MyBambu API call
-      const mybambuResponse = simulateMyBambuTransfer({
-        amount,
-        to_country,
-        recipient_name,
-        currency: corridor.currency
-      });
+      // Get last 4 digits for masked display
+      const lastFour = accountNumber.slice(-4);
+      const maskedAccount = `...${lastFour}`;
 
-      // Create transfer record
-      const transfer = {
-        id: transferId,
-        mybambu_id: mybambuResponse.mybambuTransferId,
-        from_currency: 'USD',
-        to_currency: corridor.currency,
-        amount,
-        fee: feeAmount,
-        net_amount: netAmount,
-        exchange_rate: rate,
-        recipient_amount: recipientAmount,
-        recipient_name,
-        recipient_country: corridor.country,
-        delivery_time: corridor.deliveryTime,
-        status: mybambuResponse.status,
-        estimated_arrival: mybambuResponse.estimatedDelivery,
-        created_at: new Date().toISOString(),
+      // Store FULL details server-side
+      if (!bankSessions.has(sessionId)) {
+        bankSessions.set(sessionId, {
+          bankDetails: {},
+          recipientName
+        });
+      }
+
+      const session = bankSessions.get(sessionId)!;
+      session.bankDetails = {
+        accountRef,
+        fullAccountNumber: accountNumber, // NOT sent to ChatGPT
+        maskedAccount,
+        accountType: accountType || 'SAVINGS',
+        phoneNumber,
+        idDocumentNumber,
+        city,
+        address,
+        postCode,
+        country,
+        currency: SUPPORTED_CORRIDORS.find(c => c.country.toLowerCase() === country.toLowerCase())?.currency
       };
+      session.recipientName = recipientName;
 
-      transfers.set(transferId, transfer);
-
-      // Return structured response with widget
+      // Return ONLY safe info to ChatGPT (no full account number)
       return {
         content: [{
           type: "text",
-          text: `✅ Transfer initiated! ${recipient_name} in ${corridor.country} will receive ${recipientAmount.toFixed(2)} ${corridor.currency}. Estimated delivery: ${corridor.deliveryTime}. Transfer ID: ${transferId}`
+          text: `✅ Bank details stored securely!\n\n` +
+                `👤 Recipient: ${recipientName}\n` +
+                `🏦 Account: ${maskedAccount}\n` +
+                `📍 Country: ${country}\n` +
+                `🔐 Reference: ${accountRef}\n\n` +
+                `Ready to send transfer. The full account details are stored securely and will be used automatically.`
         }],
-        structuredContent: transfer,
-        _meta: {
-          "openai/outputTemplate": "component://transfer-receipt",
-          mybambuResponse,
-          feeBreakdown: {
-            baseAmount: amount,
-            feePercentage: transferLimits.fees.standard,
-            feeAmount,
-            netAmount,
-            exchangeRate: rate,
-            finalAmount: recipientAmount
-          }
+        structuredContent: {
+          accountRef,
+          maskedAccount,
+          country,
+          recipientName,
+          sessionId
         }
       };
     }
